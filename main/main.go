@@ -1,9 +1,12 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"net/http"
+	"os"
 
+	"github.com/boltdb/bolt"
 	"github.com/gophercises/urlshort"
 )
 
@@ -17,20 +20,75 @@ func main() {
 	}
 	mapHandler := urlshort.MapHandler(pathsToUrls, mux)
 
+	yamlfile := flag.String("yamlfile", "", "path to load yml file from")
+	jsonfile := flag.String("jsonfile", "", "path to load json file from")
+	dbfile := flag.String("dbfile", "", "path to load boltDB database file from")
+	flag.Parse()
+
 	// Build the YAMLHandler using the mapHandler as the
 	// fallback
-	yaml := `
-- path: /urlshort
-  url: https://github.com/gophercises/urlshort
-- path: /urlshort-final
-  url: https://github.com/gophercises/urlshort/tree/solution
-`
-	yamlHandler, err := urlshort.YAMLHandler([]byte(yaml), mapHandler)
-	if err != nil {
-		panic(err)
+
+	var Handler http.Handler
+
+	if *yamlfile != "" {
+		yaml, err := os.ReadFile(*yamlfile)
+		if err != nil {
+			panic(err)
+		}
+		Handler, err = urlshort.YAMLHandler(yaml, mapHandler)
+		if err != nil {
+			panic(err)
+		}
 	}
+
+	if *jsonfile != "" {
+		json, err := os.ReadFile(*jsonfile)
+		if err != nil {
+			panic(err)
+		}
+		Handler, err = urlshort.JSONHandler(json, mapHandler)
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	if *dbfile != "" {
+		db, err := bolt.Open(*dbfile, 0600, nil)
+		if err != nil {
+			panic(err)
+		}
+
+		err = db.Update(func(tx *bolt.Tx) error {
+			b, err := tx.CreateBucket([]byte("shorts"))
+
+			if err == bolt.ErrBucketExists {
+				return nil
+			}
+
+			if err != nil {
+				return err
+			}
+
+			err = b.Put([]byte("/urlshort"), []byte("https://github.com/gophercises/urlshort"))
+
+			if err != nil {
+				return err
+			}
+
+			err = b.Put([]byte("/urlshort-final"), []byte("https://github.com/gophercises/urlshort/tree/solution"))
+
+			return err
+		})
+
+		if err != nil {
+			panic(err)
+		}
+
+		Handler = urlshort.DBHandler(db, mux)
+	}
+
 	fmt.Println("Starting the server on :8080")
-	http.ListenAndServe(":8080", yamlHandler)
+	http.ListenAndServe(":8080", Handler)
 }
 
 func defaultMux() *http.ServeMux {
